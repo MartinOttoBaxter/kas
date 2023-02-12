@@ -47,6 +47,7 @@ class LogOutput:
         self.live = live
         self.stdout = []
         self.stderr = []
+        self.stdout_raw = b''
 
     def log_stdout(self, line):
         """
@@ -55,6 +56,12 @@ class LogOutput:
         if self.live:
             logging.info(line.strip())
         self.stdout.append(line)
+
+    def log_stdout_raw(self, data):
+        """
+            This method is called when raw data is received over stdout.
+        """
+        self.stdout_raw += data
 
     def log_stderr(self, line):
         """
@@ -83,7 +90,17 @@ async def _read_stream(stream, callback):
             break
 
 
-async def run_cmd_async(cmd, cwd, env=None, fail=True, liveupdate=True):
+async def _read_stream_raw(stream, callback):
+    while True:
+        data = await stream.read()
+        if data:
+            callback(data)
+        else:
+            break
+
+
+async def run_cmd_async(cmd, cwd, env=None, fail=True, liveupdate=True,
+                        raw_stdout=False):
     """
         Run a command asynchronously.
     """
@@ -118,6 +135,9 @@ async def run_cmd_async(cmd, cwd, env=None, fail=True, liveupdate=True):
         return (errno.EPERM, str(ex))
 
     tasks = [
+        asyncio.ensure_future(
+            _read_stream_raw(process.stdout,
+                             logo.log_stdout_raw)) if raw_stdout else
         asyncio.ensure_future(_read_stream(process.stdout, logo.log_stdout)),
         asyncio.ensure_future(_read_stream(process.stderr, logo.log_stderr))
     ]
@@ -132,17 +152,17 @@ async def run_cmd_async(cmd, cwd, env=None, fail=True, liveupdate=True):
                 msg += line
         logging.error(msg)
 
-    return (ret, ''.join(logo.stdout))
+    return (ret, logo.stdout_raw if raw_stdout else ''.join(logo.stdout))
 
 
-def run_cmd(cmd, cwd, env=None, fail=True, liveupdate=True):
+def run_cmd(cmd, cwd, env=None, fail=True, liveupdate=True, raw_stdout=False):
     """
         Runs a command synchronously.
     """
 
     loop = asyncio.get_event_loop()
     (ret, output) = loop.run_until_complete(
-        run_cmd_async(cmd, cwd, env, fail, liveupdate))
+        run_cmd_async(cmd, cwd, env, fail, liveupdate, raw_stdout))
     if ret and fail:
         sys.exit(ret)
     return (ret, output)
