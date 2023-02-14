@@ -27,6 +27,7 @@ import re
 import os
 import sys
 import logging
+from hashlib import sha256
 from urllib.parse import urlparse
 from tempfile import TemporaryDirectory
 from .context import get_context
@@ -178,6 +179,35 @@ class RepoImpl(Repo):
         Provides a generic implementation for a Repo.
     """
 
+    def _validate_checksum(self, desired_ref):
+        gitattributes = self.path + '/.gitattributes'
+        has_gitattributes = os.path.exists(gitattributes)
+
+        if has_gitattributes:
+            os.rename(gitattributes, gitattributes + '.kas-backup')
+            open(self.path + '/.gitattributes', 'w').close()
+
+        (_, output) = run_cmd(self.archive_cmd(desired_ref),
+                              cwd=self.path, liveupdate=False,
+                              raw_stdout=True)
+        sha = sha256()
+        sha.update(output)
+        measured_sha265sum = sha.hexdigest()
+
+        if has_gitattributes:
+            os.rename(gitattributes + '.kas-backup', gitattributes)
+
+        if self.sha256sum != measured_sha265sum:
+            logging.error('Checksum mismatch for repository %s, '
+                          'expected %s vs. calculated %s',
+                          self.name,
+                          self.sha256sum,
+                          measured_sha265sum)
+            sys.exit(1)
+
+        logging.info('Checkout checksum of repository %s validated',
+                     self.name)
+
     async def fetch_async(self):
         """
             Starts asynchronous repository fetch.
@@ -281,6 +311,9 @@ class RepoImpl(Repo):
         else:
             desired_ref = self.refspec
             branch = False
+
+        if self.sha256sum:
+            self._validate_checksum(desired_ref)
 
         run_cmd(self.checkout_cmd(desired_ref, branch), cwd=self.path)
 
@@ -415,6 +448,9 @@ class GitRepo(RepoImpl):
                 'origin/{refspec}'.
                 format(refspec=self.remove_ref_prefix(self.refspec))]
 
+    def archive_cmd(self, desired_ref):
+        return ['git', 'archive', '--worktree-attributes', desired_ref]
+
     def checkout_cmd(self, desired_ref, branch):
         cmd = ['git', 'checkout', '-q', self.remove_ref_prefix(desired_ref)]
         if branch:
@@ -464,6 +500,9 @@ class MercurialRepo(RepoImpl):
     def resolve_branch_cmd(self):
         # We never need to care about creating tracking branches in mercurial
         return ['false']
+
+    def archive_cmd(self, desired_ref):
+        return ['hg', 'archive', '-t', 'tar', '-r', desired_ref, '-']
 
     def checkout_cmd(self, desired_ref, branch):
         cmd = ['hg', 'checkout', desired_ref]
