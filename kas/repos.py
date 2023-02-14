@@ -179,34 +179,56 @@ class RepoImpl(Repo):
         Provides a generic implementation for a Repo.
     """
 
+    def _checksum_cache(self):
+        return self.path + '.sha256sum'
+
+    def _purge_cached_checksum(self):
+        try:
+            os.remove(self._checksum_cache())
+        except FileNotFoundError:
+            pass
+
     def _validate_checksum(self, desired_ref):
-        gitattributes = self.path + '/.gitattributes'
-        has_gitattributes = os.path.exists(gitattributes)
+        try:
+            with open(self._checksum_cache()) as f:
+                (cached_sha256sum, cached_refspec) = f.readline().split()
+        except IOError:
+            cached_sha256sum = None
+            cached_refspec = None
 
-        if has_gitattributes:
-            os.rename(gitattributes, gitattributes + '.kas-backup')
-            open(self.path + '/.gitattributes', 'w').close()
+        if cached_refspec != desired_ref or \
+           cached_sha256sum != self.sha256sum:
+            gitattributes = self.path + '/.gitattributes'
+            has_gitattributes = os.path.exists(gitattributes)
 
-        (_, output) = run_cmd(self.archive_cmd(desired_ref),
-                              cwd=self.path, liveupdate=False,
-                              raw_stdout=True)
-        sha = sha256()
-        sha.update(output)
-        measured_sha265sum = sha.hexdigest()
+            if has_gitattributes:
+                os.rename(gitattributes, gitattributes + '.kas-backup')
+                open(self.path + '/.gitattributes', 'w').close()
 
-        if has_gitattributes:
-            os.rename(gitattributes + '.kas-backup', gitattributes)
+            (_, output) = run_cmd(self.archive_cmd(desired_ref),
+                                  cwd=self.path, liveupdate=False,
+                                  raw_stdout=True)
+            sha = sha256()
+            sha.update(output)
+            measured_sha265sum = sha.hexdigest()
 
-        if self.sha256sum != measured_sha265sum:
-            logging.error('Checksum mismatch for repository %s, '
-                          'expected %s vs. calculated %s',
-                          self.name,
-                          self.sha256sum,
-                          measured_sha265sum)
-            sys.exit(1)
+            if has_gitattributes:
+                os.rename(gitattributes + '.kas-backup', gitattributes)
 
-        logging.info('Checkout checksum of repository %s validated',
-                     self.name)
+            if self.sha256sum != measured_sha265sum:
+                self._purge_cached_checksum()
+                logging.error('Checksum mismatch for repository %s, '
+                              'expected %s vs. calculated %s',
+                              self.name,
+                              self.sha256sum,
+                              measured_sha265sum)
+                sys.exit(1)
+
+            logging.info('Checkout checksum of repository %s validated',
+                         self.name)
+
+            with open(self._checksum_cache(), 'w') as f:
+                f.write(measured_sha265sum + ' ' + desired_ref + '\n')
 
     async def fetch_async(self):
         """
@@ -275,6 +297,8 @@ class RepoImpl(Repo):
                 logging.info('Repository %s already contains %s as %s',
                              self.name, self.refspec, output.strip())
                 return retc
+
+        self._purge_cached_checksum()
 
         # Try to fetch if refspec is missing or if --update argument was passed
         (retc, output) = await run_cmd_async(self.fetch_cmd(),
