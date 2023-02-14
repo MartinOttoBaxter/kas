@@ -1,0 +1,16 @@
+header:
+  version: 14
+
+repos:
+  this:
+
+  kas:
+    url: https://github.com/siemens/kas.git
+    refspec: 8a263b6ae455929f104a79039a76936552b382b3
+    sha256sum: a66e3ff57062f39e182b2297f6b7ea3e35baa98579a40e8723ad06f6985fb3f6
+
+  hello:
+    url: https://www.mercurial-scm.org/repo/hello/
+    refspec: 82e55d328c8c
+    type: hg
+    sha256sum: 260402b2f9928f9d6ab878542d7e6e3c12daa39dd8e9eac60788022f3a73588a
